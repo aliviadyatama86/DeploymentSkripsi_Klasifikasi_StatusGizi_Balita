@@ -146,7 +146,7 @@ with tab1:
         try:
             df_raw = pd.read_excel(uploaded_file)
             df_processed = clean_and_prepare_df(df_raw)
-            st.success("✅ Data berhasil dibersihkan dan diproses (df_processed).")
+            st.success("✅ Data berhasil dibersihkan dan diproses.")
             st.dataframe(df_processed.head())
 
             mode = st.radio("Pilih Mode Analisis:", ["Analisis Per Anak", "Analisis Seluruh Balita"], horizontal=True)
@@ -281,4 +281,5 @@ with tab3:
 # -----------------------------
 st.markdown("---")
 st.caption("Catatan: Aplikasi ini adalah alat bantu. Interpretasi medis tetap perlu dikonsultasikan dengan tenaga kesehatan.")
+
 
