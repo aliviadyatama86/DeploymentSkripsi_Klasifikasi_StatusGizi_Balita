@@ -29,7 +29,7 @@ st.markdown("""
 # ============================================================
 # Load Model
 # ============================================================
-MODEL_FILE = "final_model_status_gizi.sav"
+MODEL_FILE = "final_model_klasifikasi_gizi_balita.sav"
 model = None
 model_features = None
 
@@ -281,3 +281,4 @@ with tab3:
 # -----------------------------
 st.markdown("---")
 st.caption("Catatan: Aplikasi ini adalah alat bantu. Interpretasi medis tetap perlu dikonsultasikan dengan tenaga kesehatan.")
+
