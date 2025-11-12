@@ -9,7 +9,6 @@ import pandas as pd
 import numpy as np
 import joblib
 import os
-from io import BytesIO
 from datetime import datetime
 
 # -----------------------------
@@ -20,48 +19,86 @@ st.title("🧒 Prediksi & Pemantauan Status Gizi Balita")
 
 st.markdown("""
 **Fitur aplikasi**
-- Upload file Excel berisi pengukuran balita.
-- Analisis perkembangan per tahun atau seluruh waktu.
-- Prediksi status gizi manual menggunakan model Random Forest.
-- Simpan & lihat histori hasil prediksi.
+- Upload file Excel berisi data pengukuran balita.
+- Otomatis dibersihkan (df_processed) sesuai pipeline model.
+- Analisis perkembangan per anak atau seluruh balita.
+- Prediksi manual status gizi menggunakan model Random Forest.
+- Simpan dan lihat riwayat hasil prediksi.
 """)
 
-# -----------------------------
-# Load model (jika ada)
-# -----------------------------
+# ============================================================
+# Load Model
+# ============================================================
 MODEL_FILE = "final_model_status_gizi.sav"
 model = None
 model_features = None
+
 if os.path.exists(MODEL_FILE):
     try:
         bundle = joblib.load(MODEL_FILE)
         model = bundle.get("model", None)
         model_features = bundle.get("features", None)
-        st.success("✅ Model ditemukan dan berhasil dimuat.")
+        st.success("✅ Model berhasil dimuat.")
     except Exception as e:
         st.warning(f"⚠️ Gagal memuat model: {e}")
 else:
-    st.info("⚠️ Model tidak ditemukan. Prediksi otomatis menggunakan model akan dinonaktifkan sampai file model diunggah.")
+    st.info("⚠️ Model belum ditemukan. Harap upload file model .sav terlebih dahulu.")
 
-# -----------------------------
-# Utility functions
-# -----------------------------
+# ============================================================
+# Fungsi Utility
+# ============================================================
 def clean_and_prepare_df(df):
-    """Standarisasi nama kolom & tipe untuk dataframe yang diupload."""
+    """Membersihkan dan menstandarkan dataset mentah menjadi df_processed"""
     df = df.copy()
     df.columns = [c.strip() for c in df.columns]
+    
+    # Format tanggal
     if "Tanggal Pengukuran" in df.columns:
         df["Tanggal Pengukuran"] = pd.to_datetime(df["Tanggal Pengukuran"], errors="coerce", dayfirst=True)
-    for col in ["Z-Score BB/U", "Z-Score TB/U", "Z-Score BB/TB", "BB", "TB"]:
+
+    # Perbaikan format numerik
+    num_cols = ["Z-Score BB/U", "Z-Score TB/U", "Z-Score BB/TB", "BB", "TB"]
+    for col in num_cols:
         if col in df.columns:
             df[col] = df[col].astype(str).str.replace(",", ".")
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    if "Nama Anak" in df.columns:
-        df["Nama Anak"] = df["Nama Anak"].astype(str).str.strip()
+
+    # Bersihkan teks
+    for c in ["Nama Anak", "Nama Ibu"]:
+        if c in df.columns:
+            df[c] = df[c].astype(str).str.strip()
+
+    # Mapping Posyandu sesuai model Python
+    def map_posyandu(rt, rw):
+        try:
+            rt = str(int(rt)).zfill(2)
+            rw = str(int(rw)).zfill(2)
+        except:
+            return "Lainnya"
+        if rw == '06' and rt in ['01', '02', '03']:
+            return 'Larasati 1'
+        elif rw in ['04', '05'] and rt in ['01', '02']:
+            return 'Larasati 2'
+        elif rw in ['02', '03'] and rt in ['01', '02', '03']:
+            return 'Larasati 3'
+        elif rw == '01' and rt in ['01', '02', '03']:
+            return 'Larasati 4'
+        elif rw == '07' and rt in ['01', '02', '03']:
+            return 'Larasati 5'
+        else:
+            return 'Lainnya'
+
+    if 'RT' in df.columns and 'RW' in df.columns:
+        df['Posyandu'] = df.apply(lambda row: map_posyandu(row['RT'], row['RW']), axis=1)
+    else:
+        df['Posyandu'] = "Tidak diketahui"
+
+    df = df.dropna(subset=["Nama Anak"]).drop_duplicates()
     return df
 
+
 def last_measurement_per_month(df):
-    """Ambil pengukuran terakhir tiap bulan per anak."""
+    """Ambil pengukuran terakhir tiap bulan per anak"""
     df = df.copy()
     if "Tanggal Pengukuran" not in df.columns:
         return pd.DataFrame()
@@ -71,8 +108,9 @@ def last_measurement_per_month(df):
     df_last["Periode_MonthStart"] = df_last["Periode"].dt.to_timestamp()
     return df_last
 
+
 def interpret_trend(z_series):
-    """Interpretasi sederhana trend perkembangan Z-score."""
+    """Interpretasi trend perkembangan Z-score"""
     if z_series.empty:
         return "Tidak ada data untuk analisis."
     def cat(z):
@@ -95,133 +133,71 @@ def interpret_trend(z_series):
     else:
         return "Cenderung berubah — disarankan pemantauan rutin."
 
-# -----------------------------
-# TABs
-# -----------------------------
-tab1, tab2, tab3 = st.tabs([
-    "1. Perkembangan Anak",
-    "2. Prediksi Manual",
-    "3. Histori & Reset"
-])
-
 # ============================================================
 # TAB 1 — Analisis Perkembangan Anak
 # ============================================================
+tab1, tab2, tab3 = st.tabs(["1. Perkembangan Anak", "2. Prediksi Manual", "3. Histori & Reset"])
+
 with tab1:
     st.header("📊 Analisis Perkembangan Balita")
     uploaded_file = st.file_uploader("Upload file Excel (.xlsx)", type=["xlsx", "xls"])
 
     if uploaded_file:
         try:
-            # === Baca dan siapkan data ===
-            df = pd.read_excel(uploaded_file)
-            df = clean_and_prepare_df(df)
+            df_raw = pd.read_excel(uploaded_file)
+            df_processed = clean_and_prepare_df(df_raw)
+            st.success("✅ Data berhasil dibersihkan dan diproses (df_processed).")
+            st.dataframe(df_processed.head())
 
-            # Pastikan mapping Posyandu diterapkan
-            def map_posyandu(rt, rw):
-                rt = str(rt).zfill(2)
-                rw = str(rw).zfill(2)
-                if rw == '06' and rt in ['01', '02', '03']:
-                    return 'Larasati 1'
-                elif rw in ['04', '05'] and rt in ['01', '02']:
-                    return 'Larasati 2'
-                elif rw in ['02', '03'] and rt in ['01', '02', '03']:
-                    return 'Larasati 3'
-                elif rw == '01' and rt in ['01', '02', '03']:
-                    return 'Larasati 4'
-                elif rw == '07' and rt in ['01', '02', '03']:
-                    return 'Larasati 5'
-                else:
-                    return 'Lainnya'
+            mode = st.radio("Pilih Mode Analisis:", ["Analisis Per Anak", "Analisis Seluruh Balita"], horizontal=True)
 
-            if 'RT' in df.columns and 'RW' in df.columns:
-                df['Posyandu'] = df.apply(lambda row: map_posyandu(row['RT'], row['RW']), axis=1)
-            else:
-                df['Posyandu'] = "Tidak diketahui"
-
-            st.success("File berhasil dibaca.")
-            st.dataframe(df.head())
-
-            # === Pilih mode analisis utama ===
-            mode = st.radio(
-                "Pilih Mode Analisis:",
-                ["Analisis Per Anak", "Analisis Seluruh Balita"],
-                horizontal=True
-            )
-
-            # === MODE 1: Analisis per Anak ===
+            # Analisis per anak
             if mode == "Analisis Per Anak":
-                if "Nama Anak" not in df.columns:
-                    st.error("Kolom 'Nama Anak' tidak ditemukan.")
-                else:
-                    nama_pilih = st.selectbox("Pilih Nama Anak", df["Nama Anak"].dropna().unique())
-                    jenis_analisis = st.radio("Pilih jenis analisis:", ["Per Tahun", "Seluruh Tanggal"])
+                nama_pilih = st.selectbox("Pilih Nama Anak", df_processed["Nama Anak"].dropna().unique())
+                df_anak = df_processed[df_processed["Nama Anak"] == nama_pilih].sort_values("Tanggal Pengukuran")
+                nama_ibu = df_anak["Nama Ibu"].iloc[0] if "Nama Ibu" in df_anak.columns else "-"
+                posyandu = df_anak["Posyandu"].iloc[0] if "Posyandu" in df_anak.columns else "-"
+                st.markdown(f"**Nama Ibu Kandung:** {nama_ibu}  \n**Tempat Posyandu:** {posyandu}")
 
-                    # Ambil data anak
-                    df_anak = df[df["Nama Anak"] == nama_pilih].sort_values("Tanggal Pengukuran")
-
-                    # Info tambahan
-                    nama_ibu = df_anak["Nama Ibu"].iloc[0] if "Nama Ibu" in df_anak.columns else "-"
-                    posyandu = df_anak["Posyandu"].iloc[0] if "Posyandu" in df_anak.columns else "-"
-                    st.markdown(f"**Nama Ibu Kandung:** {nama_ibu}  \n**Tempat Posyandu:** {posyandu}")
-
-                    # === Analisis Per Tahun ===
-                    if jenis_analisis == "Per Tahun":
-                        tahun_pilih = st.number_input("Masukkan Tahun", 2000, 2100, datetime.now().year)
-                        df_last = last_measurement_per_month(df)
-                        df_tahun = df_last[
-                            (df_last["Nama Anak"] == nama_pilih) &
-                            (df_last["Periode_MonthStart"].dt.year == tahun_pilih)
-                        ]
-
-                        if df_tahun.empty:
-                            st.info("Tidak ada pengukuran di tahun tersebut.")
-                        else:
-                            st.subheader(f"📋 Pengukuran Terakhir Tiap Bulan ({tahun_pilih})")
-                            st.dataframe(df_tahun[["Periode_MonthStart", "Tanggal Pengukuran", "BB", "TB", "Z-Score BB/TB", "Status BB/TB"]])
-
-                            # Grafik
-                            st.subheader("📈 Grafik Perkembangan Z-Score BB/TB per Bulan")
-                            series = df_tahun.set_index("Periode_MonthStart")["Z-Score BB/TB"]
-                            st.line_chart(series)
-                            st.info(interpret_trend(series))
-
-                    # === Analisis Seluruh Tanggal ===
+                jenis_analisis = st.radio("Jenis analisis:", ["Per Tahun", "Seluruh Tanggal"])
+                if jenis_analisis == "Per Tahun":
+                    tahun_pilih = st.number_input("Masukkan Tahun", 2000, 2100, datetime.now().year)
+                    df_last = last_measurement_per_month(df_processed)
+                    df_tahun = df_last[
+                        (df_last["Nama Anak"] == nama_pilih) &
+                        (df_last["Periode_MonthStart"].dt.year == tahun_pilih)
+                    ]
+                    if df_tahun.empty:
+                        st.info("Tidak ada pengukuran di tahun tersebut.")
                     else:
-                        st.subheader(f"📋 Semua Data Pengukuran — {nama_pilih}")
-                        display_cols = [c for c in ["Tanggal Pengukuran", "BB", "TB", "Z-Score BB/TB", "Status BB/TB"] if c in df_anak.columns]
-                        st.dataframe(df_anak[display_cols].reset_index(drop=True))
-
-                        st.subheader("📈 Grafik Perkembangan Z-Score BB/TB (Seluruh Waktu)")
-                        st.line_chart(df_anak.set_index("Tanggal Pengukuran")["Z-Score BB/TB"])
-                        st.info(interpret_trend(df_anak["Z-Score BB/TB"]))
-
-            # === MODE 2: Analisis Seluruh Balita ===
-            elif mode == "Analisis Seluruh Balita":
-                st.subheader("📊 Ringkasan Pengukuran Seluruh Balita")
-
-                # Ambil data terakhir tiap anak
-                df_last = last_measurement_per_month(df)
-                df_terbaru = df_last.sort_values("Tanggal Pengukuran").groupby("Nama Anak").tail(1)
-
-                if df_terbaru.empty:
-                    st.info("Tidak ada data pengukuran yang dapat ditampilkan.")
+                        st.subheader(f"📋 Pengukuran Terakhir Tiap Bulan ({tahun_pilih})")
+                        st.dataframe(df_tahun[["Periode_MonthStart", "Tanggal Pengukuran", "BB", "TB", "Z-Score BB/TB", "Status BB/TB"]])
+                        st.subheader("📈 Grafik Perkembangan Z-Score BB/TB per Bulan")
+                        st.line_chart(df_tahun.set_index("Periode_MonthStart")["Z-Score BB/TB"])
+                        st.info(interpret_trend(df_tahun["Z-Score BB/TB"]))
                 else:
-                    # Tampilkan ringkasan umum
-                    st.dataframe(df_terbaru[[
-                        "Nama Anak", "Nama Ibu", "Posyandu", "Tanggal Pengukuran",
-                        "BB", "TB", "Z-Score BB/TB", "Status BB/TB"
-                    ]].reset_index(drop=True))
+                    st.subheader(f"📋 Semua Data Pengukuran — {nama_pilih}")
+                    st.dataframe(df_anak[["Tanggal Pengukuran", "BB", "TB", "Z-Score BB/TB", "Status BB/TB"]])
+                    st.subheader("📈 Grafik Perkembangan Z-Score BB/TB (Seluruh Waktu)")
+                    st.line_chart(df_anak.set_index("Tanggal Pengukuran")["Z-Score BB/TB"])
+                    st.info(interpret_trend(df_anak["Z-Score BB/TB"]))
 
-                    # Grafik distribusi status gizi
-                    st.subheader("📈 Distribusi Status Gizi Terakhir")
-                    status_counts = df_terbaru["Status BB/TB"].value_counts()
-                    st.bar_chart(status_counts)
+            # Analisis seluruh balita
+            elif mode == "Analisis Seluruh Balita":
+                st.subheader("📊 Ringkasan Pengukuran Terakhir Tiap Anak")
+                df_last = last_measurement_per_month(df_processed)
+                df_terbaru = df_last.groupby("Nama Anak", as_index=False).last()
+                st.dataframe(df_terbaru[[
+                    "Nama Anak", "Nama Ibu", "Posyandu", "Tanggal Pengukuran", "BB", "TB", "Z-Score BB/TB", "Status BB/TB"
+                ]])
+                st.subheader("📈 Distribusi Status Gizi Terakhir")
+                st.bar_chart(df_terbaru["Status BB/TB"].value_counts())
 
         except Exception as e:
-            st.error(f"Gagal membaca file: {e}")
+            st.error(f"Gagal membaca atau memproses file: {e}")
     else:
         st.info("Silakan unggah file Excel terlebih dahulu.")
+
 # ============================================================
 # TAB 2 — Prediksi Manual
 # ============================================================
@@ -259,21 +235,44 @@ with tab2:
             pred = model.predict(X_input)[0]
             prob = model.predict_proba(X_input)[0]
             label_map = {0: "Gizi Buruk", 1: "Gizi Kurang", 2: "Gizi Baik", 3: "Risiko Gizi Lebih", 4: "Gizi Lebih", 5: "Obesitas"}
-            st.success(f"Prediksi: **{label_map.get(pred, 'Tidak diketahui')}** (Probabilitas {prob[pred]:.2%})")
+            hasil = label_map.get(pred, "Tidak diketahui")
+            st.success(f"Prediksi: **{hasil}** (Probabilitas {prob[pred]:.2%})")
+
+            # Simpan riwayat prediksi
+            hist_file = "riwayat_prediksi.csv"
+            new_data = pd.DataFrame([{
+                "Nama Balita": nama_input,
+                "Tanggal Pengukuran": tanggal_input,
+                "Z-Score BB/TB": z_bbtb,
+                "Z-Score BB/U": z_bbu,
+                "Z-Score TB/U": z_tbu,
+                "Status BB/U": status_bbu,
+                "Status TB/U": status_tbu,
+                "Hasil Prediksi": hasil,
+                "Probabilitas": f"{prob[pred]:.2%}"
+            }])
+            if os.path.exists(hist_file):
+                df_hist = pd.read_csv(hist_file)
+                df_hist = pd.concat([df_hist, new_data], ignore_index=True)
+            else:
+                df_hist = new_data
+            df_hist.to_csv(hist_file, index=False)
+
         else:
             st.warning("Model belum dimuat — prediksi otomatis tidak tersedia.")
 
 # ============================================================
-# TAB 3 — Histori
+# TAB 3 — Histori Prediksi
 # ============================================================
 with tab3:
     st.header("📚 Riwayat Prediksi")
-    if os.path.exists("riwayat_prediksi.csv"):
-        df_hist = pd.read_csv("riwayat_prediksi.csv")
+    hist_file = "riwayat_prediksi.csv"
+    if os.path.exists(hist_file):
+        df_hist = pd.read_csv(hist_file)
         st.dataframe(df_hist)
         if st.button("🔄 Hapus Riwayat"):
-            os.remove("riwayat_prediksi.csv")
-            st.success("Riwayat dihapus.")
+            os.remove(hist_file)
+            st.success("Riwayat prediksi dihapus.")
     else:
         st.info("Belum ada riwayat prediksi.")
 
@@ -282,4 +281,3 @@ with tab3:
 # -----------------------------
 st.markdown("---")
 st.caption("Catatan: Aplikasi ini adalah alat bantu. Interpretasi medis tetap perlu dikonsultasikan dengan tenaga kesehatan.")
-
